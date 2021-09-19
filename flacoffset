@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$@" == "" ]]; then
+    echo 'Usage: flacoffset offset output_dir input_files ...'
+    exit
+fi
+
+offset="$1"; shift
+output_dir="$1"; shift
+input_files=("$@")
+
+mapfile lengths < <(metaflac --show-total-samples "${input_files[@]}" | sed -E 's/^.*:(.*)$/\1/')
+
+tmp="$output_dir/flacoffset_tmp"
+{
+    if (( $offset > 0 )); then
+        head -c $(( $offset * 2 * 16 / 8 )) /dev/zero
+    fi
+    for input_file in "${input_files[@]}"; do
+        flac -d -o - --force-raw-format --sign=signed --endian=little -- "$input_file"
+    done
+    if (( $offset < 0 )); then
+        head -c $(( -$offset * 2 * 16 / 8 )) /dev/zero
+    fi
+} >"$tmp"
+
+start_sample=0
+if (( $offset < 0 )); then
+    start_sample=$(( $start_sample - $offset ))
+fi
+for i in "${!input_files[@]}"; do
+    length=${lengths[$i]}
+    flac --best -o "$output_dir/$(basename "${input_files[$i]}")" --force-raw-format --bps=16 --channels=2 --sign=signed --endian=little --sample-rate=44100 --skip=$start_sample --until=$(( $start_sample + $length )) "$tmp"
+    start_sample=$(( $start_sample + $length ))
+done
+
+rm "$tmp"
